@@ -22,48 +22,92 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: apache/datafusion-ballista
+
 jobs:
   build_docker:
-    name: Run Build Docker Script
+    name: Build Docker Images
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Installs Rust and Cargo
-        run: curl -y --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-      - name: Run script
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Get Ballista version
+        id: version
         run: |
+          cd ballista/core/
+          BALLISTA_VERSION=$(cargo pkgid | cut '-d@' -f2)
+          echo "ballista_version=${BALLISTA_VERSION}" >> $GITHUB_OUTPUT
 
-          ./dev/build-ballista-docker.sh
+      - name: Build images (PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/bake-action@v6
+        with:
+          files: docker-bake.hcl
+          targets: default
+          set: |
+            *.args.BALLISTA_VERSION=${{ steps.version.outputs.ballista_version }}
+            *.cache-from=type=gha
+            *.cache-to=type=gha,mode=max
 
-          docker tag apache/datafusion-ballista-standalone:latest ghcr.io/apache/datafusion-ballista-standalone:latest
-          docker tag apache/datafusion-ballista-executor:latest ghcr.io/apache/datafusion-ballista-executor:latest
-          docker tag apache/datafusion-ballista-scheduler:latest ghcr.io/apache/datafusion-ballista-scheduler:latest
+      - name: Build and push images (main/release)
+        if: github.event_name != 'pull_request'
+        uses: docker/bake-action@v6
+        with:
+          files: docker-bake.hcl
+          targets: default
+          push: true
+          set: |
+            *.args.BALLISTA_VERSION=${{ steps.version.outputs.ballista_version }}
+            *.cache-from=type=gha
+            *.cache-to=type=gha,mode=max
+            standalone.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-standalone:latest
+            scheduler.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-scheduler:latest
+            executor.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-executor:latest
+            cli.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cli:latest
+            benchmarks.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-benchmarks:latest
 
-          # release dockers only when there is a release tag 
-          export DOCKER_TAG="$(git describe --exact-match --tags $(git log -n1 --pretty='%h') || echo '')"
-          if [[ $DOCKER_TAG =~ ^[0-9\.]+(-rc[0-9]+)?$ ]]
-          then
-            
-            docker login ghcr.io -u $DOCKER_USER -p "$DOCKER_PASS"
-
-            echo "publishing docker tag $DOCKER_TAG"
-
-            docker tag apache/datafusion-ballista-standalone:latest ghcr.io/apache/datafusion-ballista-standalone:$DOCKER_TAG
-            docker tag apache/datafusion-ballista-executor:latest ghcr.io/apache/datafusion-ballista-executor:$DOCKER_TAG
-            docker tag apache/datafusion-ballista-scheduler:latest ghcr.io/apache/datafusion-ballista-scheduler:$DOCKER_TAG
-            
-            docker push ghcr.io/apache/datafusion-ballista-standalone:$DOCKER_TAG
-            docker push ghcr.io/apache/datafusion-ballista-executor:$DOCKER_TAG
-            docker push ghcr.io/apache/datafusion-ballista-scheduler:$DOCKER_TAG
-
-            echo "publishing docker tag latest"
-
-            docker push ghcr.io/apache/datafusion-ballista-standalone:latest
-            docker push ghcr.io/apache/datafusion-ballista-executor:latest
-            docker push ghcr.io/apache/datafusion-ballista-scheduler:latest
-
-          fi
-        env:
-          DOCKER_USER: ${{ github.actor }}
-          DOCKER_PASS: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push release tags
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/bake-action@v6
+        with:
+          files: docker-bake.hcl
+          targets: default
+          push: true
+          set: |
+            *.args.BALLISTA_VERSION=${{ steps.version.outputs.ballista_version }}
+            *.cache-from=type=gha
+            *.cache-to=type=gha,mode=max
+            standalone.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-standalone:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-standalone:${{ github.ref_name }}
+            scheduler.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-scheduler:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-scheduler:${{ github.ref_name }}
+            executor.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-executor:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-executor:${{ github.ref_name }}
+            cli.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cli:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cli:${{ github.ref_name }}
+            benchmarks.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-benchmarks:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-benchmarks:${{ github.ref_name }}
