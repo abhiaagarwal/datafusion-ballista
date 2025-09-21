@@ -34,8 +34,8 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -89,11 +89,6 @@ jobs:
             *.args.BALLISTA_VERSION=${{ steps.version.outputs.ballista_version }}
             *.cache-from=type=gha
             *.cache-to=type=gha,mode=max
-            standalone.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-standalone:latest
-            scheduler.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-scheduler:latest
-            executor.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-executor:latest
-            cli.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cli:latest
-            benchmarks.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-benchmarks:latest
 
       - name: Build and push release tags
         if: startsWith(github.ref, 'refs/tags/')
@@ -106,8 +101,3 @@ jobs:
             *.args.BALLISTA_VERSION=${{ steps.version.outputs.ballista_version }}
             *.cache-from=type=gha
             *.cache-to=type=gha,mode=max
-            standalone.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-standalone:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-standalone:${{ github.ref_name }}
-            scheduler.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-scheduler:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-scheduler:${{ github.ref_name }}
-            executor.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-executor:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-executor:${{ github.ref_name }}
-            cli.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cli:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cli:${{ github.ref_name }}
-            benchmarks.tags=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-benchmarks:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-benchmarks:${{ github.ref_name }}
